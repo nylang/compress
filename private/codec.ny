@@ -46,6 +46,59 @@ pub static method(CompressionStream) Decode(
   return CompressionStream.Open(format, true, max_output);
 }
 
+pub static method(CompressionStream) Compress(
+  format: CompressionFormat, input: ref ByteBuffer
+) -> Result<ByteBuffer, CompressionError> {
+  var opened = CompressionStream.Encode(format);
+  if opened.IsErr() {
+    return opened.get_if<CompressionError>() as CompressionError;
+  }
+
+  var codec = move(opened.get_if<CompressionStream>() as CompressionStream);
+  return codec.Collect(input);
+}
+
+pub static method(CompressionStream) Decompress(
+  format: CompressionFormat, input: ref ByteBuffer, max_output: uint64
+) -> Result<ByteBuffer, CompressionError> {
+  var opened = CompressionStream.Decode(format, max_output);
+  if opened.IsErr() {
+    return opened.get_if<CompressionError>() as CompressionError;
+  }
+
+  var codec = move(opened.get_if<CompressionStream>() as CompressionStream);
+  return codec.Collect(input);
+}
+
+// Keep output private until the provider has consumed exactly one complete stream.
+method(CompressionStream) Collect(input: ref ByteBuffer) -> Result<ByteBuffer, CompressionError> {
+  var output = ByteBuffer.New();
+  var offset: int32 = 0;
+  while true {
+    let step = self.Push(input, offset, true);
+    if step.IsErr() {
+      return step.get_if<CompressionError>() as CompressionError;
+    }
+
+    let progress = step.get_if<CompressionProgress>() as CompressionProgress;
+    offset += progress.consumed;
+    if progress.complete && offset != input.Len() {
+      return CompressionError.TrailingData;
+    }
+    if output.Write(progress.output.Data(), progress.output.Len() as intptr).IsErr() {
+      return CompressionError.ResourceExhausted;
+    }
+    if progress.complete {
+      return output;
+    }
+    if progress.consumed == 0 && progress.output.Len() == 0 {
+      return CompressionError.Corrupt;
+    }
+  }
+
+  return CompressionError.Corrupt;
+}
+
 pub method(CompressionStream) operator move() -> CompressionStream {
   let raw = self.raw;
   let decoding = self.decoding;

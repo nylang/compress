@@ -16,7 +16,8 @@ pub enum CompressionError {
   Corrupt,
   Truncated,
   LimitExceeded,
-  ResourceExhausted
+  ResourceExhausted,
+  TrailingData
 }
 
 /** @brief Exact input prefix consumed and one owned output block. */
@@ -28,6 +29,17 @@ pub struct CompressionProgress {
 
 /** @brief Move-only compression or decompression cursor. */
 pub struct CompressionStream;
+
+/** @brief Encode a complete buffer as one gzip member or Zstandard frame. */
+pub static method(CompressionStream) Compress(
+  format: CompressionFormat, input: ref ByteBuffer
+) -> Result<ByteBuffer, CompressionError>;
+
+/** @brief Decode exactly one member or frame into an owned buffer with an explicit byte limit.
+ * @note Trailing bytes, including concatenated members or frames, return TrailingData. */
+pub static method(CompressionStream) Decompress(
+  format: CompressionFormat, input: ref ByteBuffer, max_output: uint64
+) -> Result<ByteBuffer, CompressionError>;
 
 /** @brief Start a default-level encoder. */
 pub static method(CompressionStream) Encode(format: CompressionFormat) -> Result<CompressionStream, CompressionError>;

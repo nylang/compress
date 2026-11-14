@@ -94,3 +94,39 @@ func test_gzip_stream_and_limits() {
 func test_zstd_stream_and_limits() {
   check_codec(CompressionFormat.Zstandard);
 }
+
+func check_whole_buffer(format: CompressionFormat) -> void {
+  var input = ByteBuffer.New();
+  input.WriteString("whole buffer");
+  let encoded = CompressionStream.Compress(format, input);
+  if AssertTrue(encoded.IsOk()) != 0 {
+    return;
+  }
+
+  var wire = encoded.get_if<ByteBuffer>() as ByteBuffer;
+  let decoded = CompressionStream.Decompress(format, wire, 12u64);
+  if AssertTrue(decoded.IsOk()) != 0 {
+    return;
+  }
+
+  let result = decoded.get_if<ByteBuffer>() as ByteBuffer;
+  AssertEqString(string.ViewFrom(result.Data() as *const int8, result.Len()), "whole buffer");
+  let limited = CompressionStream.Decompress(format, wire, 11u64);
+  AssertTrue(limited.IsErr() && (limited.get_if<CompressionError>() as CompressionError) == CompressionError.LimitExceeded);
+  wire.WriteString("extra");
+  let trailing = CompressionStream.Decompress(format, wire, 12u64);
+  AssertTrue(trailing.IsErr() && (trailing.get_if<CompressionError>() as CompressionError) == CompressionError.TrailingData);
+
+  let empty = CompressionStream.Compress(format, ByteBuffer.New());
+  if AssertTrue(empty.IsOk()) != 0 {
+    return;
+  }
+  let decoded_empty = CompressionStream.Decompress(format, empty.get_if<ByteBuffer>() as ByteBuffer, 0u64);
+  AssertTrue(decoded_empty.IsOk() && (decoded_empty.get_if<ByteBuffer>() as ByteBuffer).Len() == 0);
+}
+
+@test
+func test_gzip_and_zstd_whole_buffers() {
+  check_whole_buffer(CompressionFormat.Gzip);
+  check_whole_buffer(CompressionFormat.Zstandard);
+}

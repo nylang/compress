@@ -14,3 +14,8 @@ A completed decoder stops at one
 gzip member or Zstandard frame. Use the consumed count to hand trailing
 bytes to another cursor if your format permits multiple members. A
 truncated input or exhausted decoded-byte budget retires the cursor.
+
+For inputs that already fit in memory, `CompressionStream.Compress`
+and `CompressionStream.Decompress` return a complete owned buffer.
+Decompression requires an explicit output budget and returns `TrailingData`
+if anything follows the first member or frame.
