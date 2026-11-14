@@ -83,10 +83,59 @@ pub static method(CompressionStream) Decompress(
   return codec.Collect(input);
 }
 
+pub static method(CompressionStream) DecompressAll(
+  format: CompressionFormat, input: ref ByteBuffer, max_output: uint64, max_members: int32
+) -> Result<ByteBuffer, CompressionError> {
+  if max_members <= 0 {
+    return CompressionError.InvalidArgument;
+  }
+  if input.Len() == 0 {
+    return CompressionError.Truncated;
+  }
+
+  var output = ByteBuffer.New();
+  var offset: int32 = 0;
+  var members: int32 = 0;
+  while offset < input.Len() {
+    if members == max_members {
+      return CompressionError.LimitExceeded;
+    }
+
+    var opened = CompressionStream.Decode(format, max_output - (output.Len() as uint64));
+    if opened.IsErr() {
+      return opened.get_if<CompressionError>() as CompressionError;
+    }
+    var decoder = move(opened.get_if<CompressionStream>() as CompressionStream);
+    let read = decoder.CollectMember(input, offset, output);
+    if read.IsErr() {
+      return read.get_if<CompressionError>() as CompressionError;
+    }
+
+    offset = read.get_if<int32>() as int32;
+    members += 1;
+  }
+
+  return output;
+}
+
 // Keep output private until the provider has consumed exactly one complete stream.
 method(CompressionStream) Collect(input: ref ByteBuffer) -> Result<ByteBuffer, CompressionError> {
   var output = ByteBuffer.New();
-  var offset: int32 = 0;
+  let end = self.CollectMember(input, 0, output);
+  if end.IsErr() {
+    return end.get_if<CompressionError>() as CompressionError;
+  }
+  if (end.get_if<int32>() as int32) != input.Len() {
+    return CompressionError.TrailingData;
+  }
+
+  return output;
+}
+
+method(CompressionStream) CollectMember(
+  input: ref ByteBuffer, start: int32, output: ref mut ByteBuffer
+) -> Result<int32, CompressionError> {
+  var offset = start;
   while true {
     let step = self.Push(input, offset, true);
     if step.IsErr() {
@@ -95,14 +144,11 @@ method(CompressionStream) Collect(input: ref ByteBuffer) -> Result<ByteBuffer, C
 
     let progress = step.get_if<CompressionProgress>() as CompressionProgress;
     offset += progress.consumed;
-    if progress.complete && offset != input.Len() {
-      return CompressionError.TrailingData;
-    }
     if output.Write(progress.output.Data(), progress.output.Len() as intptr).IsErr() {
       return CompressionError.ResourceExhausted;
     }
     if progress.complete {
-      return output;
+      return offset;
     }
     if progress.consumed == 0 && progress.output.Len() == 0 {
       return CompressionError.Corrupt;

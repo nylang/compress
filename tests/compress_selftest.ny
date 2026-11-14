@@ -188,3 +188,42 @@ func check_flush(format: CompressionFormat, level: int32) -> void {
   let actual = all.get_if<ByteBuffer>() as ByteBuffer;
   AssertEqString(string.ViewFrom(actual.Data() as *const int8, actual.Len()), "firstsecond");
 }
+
+@test
+func test_gzip_and_zstd_concatenated_members() {
+  check_concatenated(CompressionFormat.Gzip);
+  check_concatenated(CompressionFormat.Zstandard);
+}
+
+func check_concatenated(format: CompressionFormat) -> void {
+  var input = ByteBuffer.New();
+  let empty = CompressionStream.Compress(format, input);
+  input.WriteString("data");
+  let full = CompressionStream.Compress(format, input);
+  if AssertTrue(empty.IsOk() && full.IsOk()) != 0 {
+    return;
+  }
+
+  let a = empty.get_if<ByteBuffer>() as ByteBuffer;
+  let b = full.get_if<ByteBuffer>() as ByteBuffer;
+  var wire = ByteBuffer.New();
+  wire.Write(a.Data(), a.Len() as intptr);
+  wire.Write(b.Data(), b.Len() as intptr);
+  wire.Write(a.Data(), a.Len() as intptr);
+  let decoded = CompressionStream.DecompressAll(format, wire, 4u64, 3);
+  if AssertTrue(decoded.IsOk()) != 0 {
+    return;
+  }
+  let output = decoded.get_if<ByteBuffer>() as ByteBuffer;
+  AssertEqString(string.ViewFrom(output.Data() as *const int8, output.Len()), "data");
+  let members = CompressionStream.DecompressAll(format, wire, 4u64, 2);
+  let output_limit = CompressionStream.DecompressAll(format, wire, 3u64, 3);
+  AssertTrue(members.IsErr() && (members.get_if<CompressionError>() as CompressionError) == CompressionError.LimitExceeded);
+  AssertTrue(output_limit.IsErr() && (output_limit.get_if<CompressionError>() as CompressionError) == CompressionError.LimitExceeded);
+  AssertTrue(CompressionStream.Decompress(format, wire, 4u64).IsErr());
+
+  var short = ByteBuffer.New();
+  short.Write(wire.Data(), (wire.Len() - 1) as intptr);
+  let truncated = CompressionStream.DecompressAll(format, short, 4u64, 3);
+  AssertTrue(truncated.IsErr() && (truncated.get_if<CompressionError>() as CompressionError) == CompressionError.Truncated);
+}

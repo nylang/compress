@@ -19,6 +19,9 @@ For inputs that already fit in memory, `CompressionStream.Compress`
 and `CompressionStream.Decompress` return a complete owned buffer.
 Decompression requires an explicit output budget and returns `TrailingData`
 if anything follows the first member or frame.
+Use `DecompressAll` for concatenated members or frames of one format.
+The output limit applies across the whole input, and the member limit
+includes empty members.
 
 `EncodeLevel` selects gzip levels 0 through 9 or Zstandard levels 1 through 22.
 After the encoder has consumed the supplied input, call `Flush` until it

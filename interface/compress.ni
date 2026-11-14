@@ -41,6 +41,13 @@ pub static method(CompressionStream) Decompress(
   format: CompressionFormat, input: ref ByteBuffer, max_output: uint64
 ) -> Result<ByteBuffer, CompressionError>;
 
+/** @brief Decode one or more concatenated members or frames of the specified format.
+ * @note Limits apply to aggregate output and number of members, including empty
+ * members. Any malformed or truncated member fails the entire operation. */
+pub static method(CompressionStream) DecompressAll(
+  format: CompressionFormat, input: ref ByteBuffer, max_output: uint64, max_members: int32
+) -> Result<ByteBuffer, CompressionError>;
+
 /** @brief Start a default-level encoder. */
 pub static method(CompressionStream) Encode(format: CompressionFormat) -> Result<CompressionStream, CompressionError>;
 
