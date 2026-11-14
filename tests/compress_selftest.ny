@@ -130,3 +130,61 @@ func test_gzip_and_zstd_whole_buffers() {
   check_whole_buffer(CompressionFormat.Gzip);
   check_whole_buffer(CompressionFormat.Zstandard);
 }
+
+@test
+func test_gzip_and_zstd_flush_without_ending() {
+  AssertTrue(CompressionStream.EncodeLevel(CompressionFormat.Gzip, 10).IsErr());
+  AssertTrue(CompressionStream.EncodeLevel(CompressionFormat.Zstandard, 0).IsErr());
+  check_flush(CompressionFormat.Gzip, 0);
+  check_flush(CompressionFormat.Zstandard, 1);
+}
+
+func check_flush(format: CompressionFormat, level: int32) -> void {
+  var opened = CompressionStream.EncodeLevel(format, level);
+  if AssertTrue(opened.IsOk()) != 0 {
+    return;
+  }
+
+  var encoder = move(opened.get_if<CompressionStream>() as CompressionStream);
+  var input = ByteBuffer.New();
+  input.WriteString("first");
+  let pushed = encoder.Push(input, 0, false);
+  if AssertTrue(pushed.IsOk()) != 0 {
+    return;
+  }
+  let progress = pushed.get_if<CompressionProgress>() as CompressionProgress;
+  AssertEqI32(progress.consumed, 5);
+  var wire = ByteBuffer.New();
+  wire.Write(progress.output.Data(), progress.output.Len() as intptr);
+  let flushed = encoder.Flush();
+  if AssertTrue(flushed.IsOk()) != 0 {
+    return;
+  }
+  let chunk = flushed.get_if<CompressionFlush>() as CompressionFlush;
+  AssertTrue(chunk.drained);
+  wire.Write(chunk.output.Data(), chunk.output.Len() as intptr);
+
+  var decoder_result = CompressionStream.Decode(format, 11u64);
+  var decoder = move(decoder_result.get_if<CompressionStream>() as CompressionStream);
+  let early = decoder.Push(wire, 0, false);
+  if AssertTrue(early.IsOk()) != 0 {
+    return;
+  }
+  let decoded = early.get_if<CompressionProgress>() as CompressionProgress;
+  AssertTrue(!decoded.complete);
+  AssertEqString(string.ViewFrom(decoded.output.Data() as *const int8, decoded.output.Len()), "first");
+
+  input.WriteString("second");
+  let tail = run_codec(encoder, input, 5);
+  if AssertTrue(tail.IsOk()) != 0 {
+    return;
+  }
+  let final_wire = tail.get_if<ByteBuffer>() as ByteBuffer;
+  wire.Write(final_wire.Data(), final_wire.Len() as intptr);
+  let all = CompressionStream.Decompress(format, wire, 11u64);
+  if AssertTrue(all.IsOk()) != 0 {
+    return;
+  }
+  let actual = all.get_if<ByteBuffer>() as ByteBuffer;
+  AssertEqString(string.ViewFrom(actual.Data() as *const int8, actual.Len()), "firstsecond");
+}

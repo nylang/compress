@@ -6,7 +6,7 @@ module StreamingCompression;
 import "stdlib:stdlib.ny";
 import "interface/compress.ni";
 
-@extern("C") func nyra_compress_open(format: int32, encode: int32) -> *mut int8;
+@extern("C") func nyra_compress_open(format: int32, encode: int32, level: int32) -> *mut int8;
 @extern("C") func nyra_compress_drop(state: *mut int8) -> void;
 @extern("C") func nyra_compress_step(
   state: *mut int8, input: *const uint8, length: int32, output: *mut uint8, capacity: int32,
@@ -14,6 +14,7 @@ import "interface/compress.ni";
 ) -> int32;
 
 constexpr kCompressionBlock: int32 = 16384;
+constexpr kCompressionFlush: int32 = 2;
 
 /** @brief Move-only hosted codec state with an output budget in decode mode. */
 pub struct CompressionStream {
@@ -21,14 +22,15 @@ pub struct CompressionStream {
   decoding: bool;
   remaining: uint64;
   ending: bool;
+  flushing: bool;
 }
 
 static method(CompressionStream) Open(
-  format: CompressionFormat, decoding: bool, budget: uint64
+  format: CompressionFormat, decoding: bool, budget: uint64, level: int32
 ) -> Result<CompressionStream, CompressionError> {
   let kind: int32 = format == CompressionFormat.Gzip ? 1 : 2;
   let encode: int32 = decoding ? 0 : 1;
-  let raw = nyra_compress_open(kind, encode);
+  let raw = nyra_compress_open(kind, encode, level);
   if raw == nil {
     return CompressionError.ResourceExhausted;
   }
@@ -37,13 +39,24 @@ static method(CompressionStream) Open(
 }
 
 pub static method(CompressionStream) Encode(format: CompressionFormat) -> Result<CompressionStream, CompressionError> {
-  return CompressionStream.Open(format, false, 0u64);
+  return CompressionStream.Open(format, false, 0u64, format == CompressionFormat.Gzip ? -1 : 0);
+}
+
+pub static method(CompressionStream) EncodeLevel(
+  format: CompressionFormat, level: int32
+) -> Result<CompressionStream, CompressionError> {
+  let valid = format == CompressionFormat.Gzip ? level >= 0 && level <= 9 : level >= 1 && level <= 22;
+  if !valid {
+    return CompressionError.InvalidArgument;
+  }
+
+  return CompressionStream.Open(format, false, 0u64, level);
 }
 
 pub static method(CompressionStream) Decode(
   format: CompressionFormat, max_output: uint64
 ) -> Result<CompressionStream, CompressionError> {
-  return CompressionStream.Open(format, true, max_output);
+  return CompressionStream.Open(format, true, max_output, 0);
 }
 
 pub static method(CompressionStream) Compress(
@@ -104,9 +117,10 @@ pub method(CompressionStream) operator move() -> CompressionStream {
   let decoding = self.decoding;
   let remaining = self.remaining;
   let ending = self.ending;
+  let flushing = self.flushing;
   self.raw = nil;
 
-  return CompressionStream{raw: raw, decoding: decoding, remaining: remaining, ending: ending};
+  return CompressionStream{raw: raw, decoding: decoding, remaining: remaining, ending: ending, flushing: flushing};
 }
 
 pub method(CompressionStream) operator drop() -> void {
@@ -127,13 +141,42 @@ pub method(CompressionStream) Push(
   return self.PushRange(input, offset, length, end_of_input);
 }
 
+pub method(CompressionStream) Flush() -> Result<CompressionFlush, CompressionError> {
+  if self.raw == nil {
+    return CompressionError.Closed;
+  }
+  if self.decoding || self.ending {
+    return CompressionError.InvalidArgument;
+  }
+
+  var block: <uint8>[16384] = <uint8>[16384]{};
+  var consumed: int32 = 0;
+  var produced: int32 = 0;
+  let status = nyra_compress_step(
+    self.raw, nil, 0, &mut block[0], kCompressionBlock, kCompressionFlush, &mut consumed, &mut produced
+  );
+  if status > 1 {
+    self.Close();
+    return status == 3 ? CompressionError.ResourceExhausted : CompressionError.Corrupt;
+  }
+
+  var output = ByteBuffer.New();
+  if output.Write(&block[0], produced as intptr).IsErr() {
+    self.Close();
+    return CompressionError.ResourceExhausted;
+  }
+
+  self.flushing = status == 0;
+  return CompressionFlush{output: output, drained: !self.flushing};
+}
+
 pub method(CompressionStream) PushRange(
   input: ref ByteBuffer, offset: int32, length: int32, end_of_input: bool
 ) -> Result<CompressionProgress, CompressionError> {
   if self.raw == nil {
     return CompressionError.Closed;
   }
-  if offset < 0 || offset > input.Len() || length < 0 || length > input.Len() - offset ||
+  if self.flushing || offset < 0 || offset > input.Len() || length < 0 || length > input.Len() - offset ||
       (self.ending && !end_of_input) {
     return CompressionError.InvalidArgument;
   }

@@ -44,6 +44,22 @@ pub static method(CompressionStream) Decompress(
 /** @brief Start a default-level encoder. */
 pub static method(CompressionStream) Encode(format: CompressionFormat) -> Result<CompressionStream, CompressionError>;
 
+/** @brief Start an encoder at an explicit level. Gzip accepts 0..9 and Zstandard accepts 1..22. */
+pub static method(CompressionStream) EncodeLevel(
+  format: CompressionFormat, level: int32
+) -> Result<CompressionStream, CompressionError>;
+
+/** @brief Encoded bytes emitted by one nonterminal flush step. */
+pub struct CompressionFlush {
+  output: ByteBuffer;
+  drained: bool;
+}
+
+/** @brief Emit pending encoder bytes without ending the member or frame.
+ * @note Repeat until drained before calling Push. Always resubmit any unconsumed
+ * input from the preceding Push before flushing. */
+pub method(CompressionStream) Flush() -> Result<CompressionFlush, CompressionError>;
+
 /** @brief Start a decoder with an explicit total output byte budget, including zero. */
 pub static method(CompressionStream) Decode(
   format: CompressionFormat, max_output: uint64
