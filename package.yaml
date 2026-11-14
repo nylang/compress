@@ -1,0 +1,6 @@
+name: compress
+version: 0.1.0
+license: MIT
+directories:
+  interface: [interface]
+  private: [private, tests]
