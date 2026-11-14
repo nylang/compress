@@ -5,8 +5,10 @@ import "stdlib:stdlib.ny";
 import "ntest:ntest.ny";
 import "compress.ny";
 
-func run_codec(encoder: ref mut CompressionStream, bytes: ref ByteBuffer) -> Result<ByteBuffer, CompressionError> {
-  var offset: int32 = 0;
+func run_codec(
+  encoder: ref mut CompressionStream, bytes: ref ByteBuffer, start: int32
+) -> Result<ByteBuffer, CompressionError> {
+  var offset = start;
   var output = ByteBuffer.New();
   while true {
     let result = encoder.Push(bytes, offset, true);
@@ -41,15 +43,26 @@ func check_codec(format: CompressionFormat) -> void {
     return;
   }
   var encoder = move(created.get_if<CompressionStream>() as CompressionStream);
-  let encoded = run_codec(encoder, bytes);
+  let invalid = encoder.PushRange(bytes, 1, bytes.Len(), true);
+  AssertTrue(invalid.IsErr() && (invalid.get_if<CompressionError>() as CompressionError) == CompressionError.InvalidArgument);
+  let prefix = encoder.PushRange(bytes, 0, 3, false);
+  if AssertTrue(prefix.IsOk()) != 0 {
+    return;
+  }
+  let first = prefix.get_if<CompressionProgress>() as CompressionProgress;
+  AssertEqI32(first.consumed, 3);
+  let encoded = run_codec(encoder, bytes, first.consumed);
   if AssertTrue(encoded.IsOk()) != 0 {
     return;
   }
-  let wire = encoded.get_if<ByteBuffer>() as ByteBuffer;
+  var wire = ByteBuffer.New();
+  let last = encoded.get_if<ByteBuffer>() as ByteBuffer;
+  wire.Write(first.output.Data(), first.output.Len() as intptr);
+  wire.Write(last.Data(), last.Len() as intptr);
 
   var decode = CompressionStream.Decode(format, bytes.Len() as uint64);
   var decoder = move(decode.get_if<CompressionStream>() as CompressionStream);
-  let decoded = run_codec(decoder, wire);
+  let decoded = run_codec(decoder, wire, 0);
   if AssertTrue(decoded.IsOk()) != 0 {
     return;
   }
@@ -61,14 +74,14 @@ func check_codec(format: CompressionFormat) -> void {
 
   var capped = CompressionStream.Decode(format, (bytes.Len() - 1) as uint64);
   var limited = move(capped.get_if<CompressionStream>() as CompressionStream);
-  let rejected = run_codec(limited, wire);
+  let rejected = run_codec(limited, wire, 0);
   AssertTrue(rejected.IsErr() && (rejected.get_if<CompressionError>() as CompressionError) == CompressionError.LimitExceeded);
 
   var shortened = ByteBuffer.New();
   shortened.Write(wire.Data(), (wire.Len() - 1) as intptr);
   var truncated = CompressionStream.Decode(format, bytes.Len() as uint64);
   var partial = move(truncated.get_if<CompressionStream>() as CompressionStream);
-  let failure = run_codec(partial, shortened);
+  let failure = run_codec(partial, shortened, 0);
   AssertTrue(failure.IsErr() && (failure.get_if<CompressionError>() as CompressionError) == CompressionError.Truncated);
 }
 

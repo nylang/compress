@@ -70,10 +70,18 @@ method(CompressionStream) Close() -> void {
 pub method(CompressionStream) Push(
   input: ref ByteBuffer, offset: int32, end_of_input: bool
 ) -> Result<CompressionProgress, CompressionError> {
+  let length = offset >= 0 && offset <= input.Len() ? input.Len() - offset : 0;
+  return self.PushRange(input, offset, length, end_of_input);
+}
+
+pub method(CompressionStream) PushRange(
+  input: ref ByteBuffer, offset: int32, length: int32, end_of_input: bool
+) -> Result<CompressionProgress, CompressionError> {
   if self.raw == nil {
     return CompressionError.Closed;
   }
-  if offset < 0 || offset > input.Len() || (self.ending && !end_of_input) {
+  if offset < 0 || offset > input.Len() || length < 0 || length > input.Len() - offset ||
+      (self.ending && !end_of_input) {
     return CompressionError.InvalidArgument;
   }
 
@@ -90,7 +98,7 @@ pub method(CompressionStream) Push(
   let address = (input.Data() as intptr) + (offset as intptr);
   let finish: int32 = end_of_input ? 1 : 0;
   let status = nyra_compress_step(
-    self.raw, address as *const uint8, input.Len() - offset, &mut block[0], capacity,
+    self.raw, address as *const uint8, length, &mut block[0], capacity,
     finish, &mut consumed, &mut produced
   );
   if status > 1 {

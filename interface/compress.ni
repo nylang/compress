@@ -53,3 +53,9 @@ pub method(CompressionStream) operator drop() -> void;
 pub method(CompressionStream) Push(
   input: ref ByteBuffer, offset: int32, end_of_input: bool
 ) -> Result<CompressionProgress, CompressionError>;
+
+/** @brief Process a bounded range of a reusable input buffer.
+ * @note consumed is relative to offset. An invalid range leaves the stream usable. */
+pub method(CompressionStream) PushRange(
+  input: ref ByteBuffer, offset: int32, length: int32, end_of_input: bool
+) -> Result<CompressionProgress, CompressionError>;
