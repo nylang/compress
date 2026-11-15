@@ -6,7 +6,7 @@ module StreamingCompression;
 import "stdlib:stdlib.ny";
 import "interface/compress.ni";
 
-@extern("C") func nyra_compress_open(format: int32, encode: int32, level: int32) -> *mut int8;
+@extern("C") func nyra_compress_open(format: int32, encode: int32, level: int32, window_log: int32) -> *mut int8;
 @extern("C") func nyra_compress_drop(state: *mut int8) -> void;
 @extern("C") func nyra_compress_step(
   state: *mut int8, input: *const uint8, length: int32, output: *mut uint8, capacity: int32,
@@ -26,11 +26,11 @@ pub struct CompressionStream {
 }
 
 static method(CompressionStream) Open(
-  format: CompressionFormat, decoding: bool, budget: uint64, level: int32
+  format: CompressionFormat, decoding: bool, budget: uint64, level: int32, window_log: int32
 ) -> Result<CompressionStream, CompressionError> {
   let kind: int32 = format == CompressionFormat.Gzip ? 1 : 2;
   let encode: int32 = decoding ? 0 : 1;
-  let raw = nyra_compress_open(kind, encode, level);
+  let raw = nyra_compress_open(kind, encode, level, window_log);
   if raw == nil {
     return CompressionError.ResourceExhausted;
   }
@@ -39,7 +39,7 @@ static method(CompressionStream) Open(
 }
 
 pub static method(CompressionStream) Encode(format: CompressionFormat) -> Result<CompressionStream, CompressionError> {
-  return CompressionStream.Open(format, false, 0u64, format == CompressionFormat.Gzip ? -1 : 0);
+  return CompressionStream.Open(format, false, 0u64, format == CompressionFormat.Gzip ? -1 : 0, 0);
 }
 
 pub static method(CompressionStream) EncodeLevel(
@@ -50,13 +50,23 @@ pub static method(CompressionStream) EncodeLevel(
     return CompressionError.InvalidArgument;
   }
 
-  return CompressionStream.Open(format, false, 0u64, level);
+  return CompressionStream.Open(format, false, 0u64, level, 0);
 }
 
 pub static method(CompressionStream) Decode(
   format: CompressionFormat, max_output: uint64
 ) -> Result<CompressionStream, CompressionError> {
-  return CompressionStream.Open(format, true, max_output, 0);
+  return CompressionStream.Open(format, true, max_output, 0, 0);
+}
+
+pub static method(CompressionStream) DecodeZstandard(
+  max_output: uint64, window_log: int32
+) -> Result<CompressionStream, CompressionError> {
+  if window_log < 10 || window_log > 27 {
+    return CompressionError.InvalidArgument;
+  }
+
+  return CompressionStream.Open(CompressionFormat.Zstandard, true, max_output, 0, window_log);
 }
 
 pub static method(CompressionStream) Compress(
@@ -245,6 +255,9 @@ pub method(CompressionStream) PushRange(
   );
   if status > 1 {
     self.Close();
+    if status == 4 {
+      return CompressionError.LimitExceeded;
+    }
     return status == 3 ? CompressionError.ResourceExhausted : CompressionError.Corrupt;
   }
   if self.decoding {

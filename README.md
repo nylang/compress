@@ -28,3 +28,7 @@ After the encoder has consumed the supplied input, call `Flush` until it
 reports `drained`. Append every returned output block to the same stream.
 Flushing makes the accepted data available to a decoder while leaving the
 member or frame open for further writes.
+
+`DecodeZstandard(max_output, window_log)` lets callers cap the frame's
+advertised history window separately from its total decoded size. Values
+10 through 27 select powers of two in bytes. Codec overhead is additional.

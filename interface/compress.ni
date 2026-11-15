@@ -72,6 +72,14 @@ pub static method(CompressionStream) Decode(
   format: CompressionFormat, max_output: uint64
 ) -> Result<CompressionStream, CompressionError>;
 
+/** @brief Start Zstandard decoding with an explicit window and total output limit.
+ * @note window_log is 10..27 and caps the advertised window at 2^window_log bytes.
+ * An oversized frame returns LimitExceeded. Provider overhead is additional.
+ * As with Decode, resubmit the unconsumed input reported by Push. */
+pub static method(CompressionStream) DecodeZstandard(
+  max_output: uint64, window_log: int32
+) -> Result<CompressionStream, CompressionError>;
+
 /** @brief Active codec state has one owner. */
 pub method(CompressionStream) operator copy() -> CompressionStream = delete;
 

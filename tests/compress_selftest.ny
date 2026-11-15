@@ -195,6 +195,29 @@ func test_gzip_and_zstd_concatenated_members() {
   check_concatenated(CompressionFormat.Zstandard);
 }
 
+@test
+func test_zstd_explicit_window_budget() {
+  AssertTrue(CompressionStream.DecodeZstandard(4096u64, 9).IsErr());
+  var payload = ByteBuffer.New();
+  var count: int32 = 0;
+  while count < 512 {
+    payload.WriteString("12345678");
+    count += 1;
+  }
+  let encoded = CompressionStream.Compress(CompressionFormat.Zstandard, payload);
+  if AssertTrue(encoded.IsOk()) != 0 {
+    return;
+  }
+  let wire = encoded.get_if<ByteBuffer>() as ByteBuffer;
+  var small = CompressionStream.DecodeZstandard(4096u64, 10);
+  var decoder = move(small.get_if<CompressionStream>() as CompressionStream);
+  let rejected = run_codec(decoder, wire, 0);
+  AssertTrue(rejected.IsErr() && (rejected.get_if<CompressionError>() as CompressionError) == CompressionError.LimitExceeded);
+  var normal = CompressionStream.DecodeZstandard(4096u64, 22);
+  var accepted = move(normal.get_if<CompressionStream>() as CompressionStream);
+  AssertTrue(run_codec(accepted, wire, 0).IsOk());
+}
+
 func check_concatenated(format: CompressionFormat) -> void {
   var input = ByteBuffer.New();
   let empty = CompressionStream.Compress(format, input);

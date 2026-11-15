@@ -5,14 +5,16 @@
 #include <stdlib.h>
 #include <zlib.h>
 #include <zstd.h>
+#include <zstd_errors.h>
 
-enum { CONTINUE, COMPLETE, BAD_DATA, RESOURCE };
+enum { CONTINUE, COMPLETE, BAD_DATA, RESOURCE, WINDOW_LIMIT };
 enum { GZIP = 1, ZSTANDARD = 2 };
 enum { PUSH, FINISH, FLUSH };
 
 typedef struct {
     int format;
     int encode;
+    int split_header;
     z_stream gzip;
     ZSTD_CCtx *encoder;
     ZSTD_DCtx *decoder;
@@ -30,7 +32,7 @@ void nyra_compress_drop(codec *state) {
     free(state);
 }
 
-codec *nyra_compress_open(int format, int encode, int level) {
+codec *nyra_compress_open(int format, int encode, int level, int window_log) {
     codec *state = calloc(1, sizeof(*state));
     if (!state) return NULL;
     state->format = format;
@@ -49,8 +51,9 @@ codec *nyra_compress_open(int format, int encode, int level) {
             }
         } else {
             state->decoder = ZSTD_createDCtx();
+            state->split_header = window_log != 0;
             if (state->decoder &&
-                !ZSTD_isError(ZSTD_DCtx_setParameter(state->decoder, ZSTD_d_windowLogMax, 27))) {
+                !ZSTD_isError(ZSTD_DCtx_setParameter(state->decoder, ZSTD_d_windowLogMax, window_log ? window_log : 27))) {
                 return state;
             }
         }
@@ -80,13 +83,24 @@ int nyra_compress_step(codec *state, const uint8_t *input, int length, uint8_t *
         return status == Z_OK || status == Z_BUF_ERROR ? CONTINUE : BAD_DATA;
     }
 
-    ZSTD_inBuffer source = {input, (size_t)length, 0};
+    size_t admitted = (size_t)length;
+    if (state->split_header && length > 0) {
+        // Give the streaming decoder an incomplete header to disable its direct whole-frame path.
+        if (admitted > 5) admitted = 5;
+        state->split_header = 0;
+    }
+    ZSTD_inBuffer source = {input, admitted, 0};
     ZSTD_outBuffer dest = {output, (size_t)capacity, 0};
     ZSTD_EndDirective directive = action == FLUSH ? ZSTD_e_flush : action == FINISH ? ZSTD_e_end : ZSTD_e_continue;
     size_t status = state->encode
         ? ZSTD_compressStream2(state->encoder, &dest, &source, directive)
         : ZSTD_decompressStream(state->decoder, &dest, &source);
-    if (ZSTD_isError(status)) return BAD_DATA;
+    if (ZSTD_isError(status)) {
+        ZSTD_ErrorCode error = ZSTD_getErrorCode(status);
+        if (error == ZSTD_error_frameParameter_windowTooLarge) return WINDOW_LIMIT;
+        if (error == ZSTD_error_memory_allocation) return RESOURCE;
+        return BAD_DATA;
+    }
     *consumed = (int)source.pos;
     *produced = (int)dest.pos;
     return status == 0 && (!state->encode || action != PUSH) ? COMPLETE : CONTINUE;
