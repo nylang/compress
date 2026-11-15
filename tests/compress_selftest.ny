@@ -157,7 +157,11 @@ func check_sequence_file(format: CompressionFormat, directory: ref Directory, su
   var second = ByteBuffer.New();
   first.WriteString("first ");
   second.WriteString("second");
-  let one = CompressionStream.Compress(format, first);
+  let plain_file = File.New(Path.Join(directory.Path(), suffix.Concat(".plain")));
+  let encoded_file = File.New(Path.Join(directory.Path(), suffix.Concat(".member")));
+  AssertTrue(plain_file.WriteBuffer(first).IsOk());
+  AssertTrue(encode_file(format, plain_file, encoded_file));
+  let one = encoded_file.ReadAsBytes();
   let two = CompressionStream.Compress(format, second);
   if AssertTrue(one.IsOk() && two.IsOk()) != 0 {
     return;
@@ -193,6 +197,21 @@ func check_sequence_file(format: CompressionFormat, directory: ref Directory, su
   AssertTrue(boundary.IsOk() && !(boundary.get_if<CompressionTransfer>() as CompressionTransfer).complete);
   let rejected = decoder.PushBytes(ByteView{data: right.Data(), length: right.Len() as uintptr}, output_view, true);
   AssertTrue(rejected.IsErr() && (rejected.get_if<CompressionError>() as CompressionError) == CompressionError.LimitExceeded);
+}
+
+func encode_file(format: CompressionFormat, source: ref File, destination: ref File) -> bool {
+  var input = source.Open(FileMode.Read);
+  var output = destination.Open(FileMode.Write);
+  if input.IsErr() || output.IsErr() {
+    return false;
+  }
+
+  var reader = move(input.get_if<FileStream>() as FileStream);
+  var writer = move(output.get_if<FileStream>() as FileStream);
+  let encoded = CompressionStream.EncodeStream(format, reader, writer);
+  let closed_input = reader.Close();
+  let closed_output = writer.Close();
+  return encoded.IsOk() && closed_input.IsOk() && closed_output.IsOk();
 }
 
 func check_push_into(format: CompressionFormat) -> void {

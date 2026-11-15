@@ -136,6 +136,12 @@ pub method(CompressionStream) PushBytes(
   input: ByteView, output: MutableByteView, end_of_input: bool
 ) -> Result<CompressionTransfer, CompressionError>;
 
+/** @brief Encode one member or frame between blocking streams with bounded scratch.
+ * @note Streams stay open. A transfer error may leave partial encoded output. */
+pub static method(CompressionStream) EncodeStream(
+  format: CompressionFormat, source: ref mut Stream, destination: ref mut Stream
+) -> Result<Unit, CompressionError>;
+
 /** @brief Owns incremental decoding of concatenated gzip members or Zstandard frames. */
 pub struct CompressionSequence;
 pub method(CompressionSequence) operator copy() -> CompressionSequence = delete;

@@ -101,6 +101,31 @@ pub static method(CompressionSequence) DecodeStream(
   }
 
   var decoder = move(opened.get_if<CompressionSequence>() as CompressionSequence);
+  var transfer = CompressionStreamTransfer{decoder: move(decoder), decoding: true};
+  return transfer.Copy(source, destination);
+}
+
+pub static method(CompressionStream) EncodeStream(
+  format: CompressionFormat, source: ref mut Stream, destination: ref mut Stream
+) -> Result<Unit, CompressionError> {
+  var opened = CompressionStream.Encode(format);
+  if opened.IsErr() {
+    return opened.get_if<CompressionError>() as CompressionError;
+  }
+
+  var transfer = CompressionStreamTransfer{encoder: move(opened.get_if<CompressionStream>() as CompressionStream)};
+  return transfer.Copy(source, destination);
+}
+
+// The constructors populate exactly one cursor. Copy owns the source
+// buffering and writes each produced range completely before advancing.
+struct CompressionStreamTransfer {
+  encoder: CompressionStream;
+  decoder: CompressionSequence;
+  decoding: bool;
+}
+
+method(CompressionStreamTransfer) Copy(source: ref mut Stream, destination: ref mut Stream) -> Result<Unit, CompressionError> {
   var input: <uint8>[16384] = <uint8>[16384]{};
   var output: <uint8>[16384] = <uint8>[16384]{};
   let target = MutableByteView{data: &mut output[0], length: 16384up};
@@ -124,7 +149,7 @@ pub static method(CompressionSequence) DecodeStream(
 
     let address = (&input[0] as intptr) + offset;
     let view = ByteView{data: address as *const uint8, length: (size - offset) as uintptr};
-    let stepped = decoder.PushBytes(view, target, eof);
+    let stepped = self.decoding ? self.decoder.PushBytes(view, target, eof) : self.encoder.PushBytes(view, target, eof);
     if stepped.IsErr() {
       return stepped.get_if<CompressionError>() as CompressionError;
     }
