@@ -10,6 +10,9 @@ current input block and its consumed offset, collect the owned output
 block, and advance by the exact consumed count. Supply `end_of_input` for
 the last block and subsequent drains. Use `PushRange` to process a single
 subrange of a reused buffer. Invalid ranges leave the cursor usable.
+Use `PushInto` with a nonempty `MutableByteView` to write directly into
+a reusable output buffer. Advance by the returned consumed count and use
+only the produced prefix. The input and output ranges must be disjoint.
 A completed decoder stops at one
 gzip member or Zstandard frame. Use the consumed count to hand trailing
 bytes to another cursor if your format permits multiple members. A

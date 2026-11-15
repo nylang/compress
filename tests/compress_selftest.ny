@@ -132,6 +132,58 @@ func test_gzip_and_zstd_whole_buffers() {
 }
 
 @test
+func test_gzip_and_zstd_push_into_caller_buffer() {
+  check_push_into(CompressionFormat.Gzip);
+  check_push_into(CompressionFormat.Zstandard);
+}
+
+func check_push_into(format: CompressionFormat) -> void {
+  var input = ByteBuffer.New();
+  input.WriteString("a small buffer exercises repeated draining");
+  let encoded = CompressionStream.Compress(format, input);
+  if AssertTrue(encoded.IsOk()) != 0 {
+    return;
+  }
+
+  let wire = encoded.get_if<ByteBuffer>() as ByteBuffer;
+  var opened = CompressionStream.Decode(format, input.Len() as uint64);
+  if AssertTrue(opened.IsOk()) != 0 {
+    return;
+  }
+
+  var decoder = move(opened.get_if<CompressionStream>() as CompressionStream);
+  AssertTrue(decoder.PushInto(wire, 0, wire.Len(), MutableByteView{}, true).IsErr());
+  var scratch: <uint8>[3] = <uint8>[3]{};
+  let output = MutableByteView{data: &mut scratch[0], length: 2up};
+  var recovered = ByteBuffer.New();
+  var offset: int32 = 0;
+  var complete = false;
+  while !complete {
+    scratch[2] = 197u8;
+    let step = decoder.PushInto(wire, offset, wire.Len() - offset, output, true);
+    if AssertTrue(step.IsOk()) != 0 {
+      return;
+    }
+
+    let progress = step.get_if<CompressionTransfer>() as CompressionTransfer;
+    if AssertTrue(progress.produced <= 2 && progress.consumed <= wire.Len() - offset && scratch[2] == 197u8 &&
+        (progress.complete || progress.consumed > 0 || progress.produced > 0)) != 0 {
+      return;
+    }
+
+    offset += progress.consumed;
+    recovered.Write(&scratch[0], progress.produced as intptr);
+    complete = progress.complete;
+  }
+
+  AssertEqI32(offset, wire.Len());
+  AssertEqString(
+    string.ViewFrom(recovered.Data() as *const int8, recovered.Len()),
+    string.ViewFrom(input.Data() as *const int8, input.Len())
+  );
+}
+
+@test
 func test_gzip_and_zstd_flush_without_ending() {
   AssertTrue(CompressionStream.EncodeLevel(CompressionFormat.Gzip, 10).IsErr());
   AssertTrue(CompressionStream.EncodeLevel(CompressionFormat.Zstandard, 0).IsErr());

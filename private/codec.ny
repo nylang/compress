@@ -182,22 +182,24 @@ method(CompressionStream) Collect(input: ref ByteBuffer) -> Result<ByteBuffer, C
 method(CompressionStream) CollectMember(
   input: ref ByteBuffer, start: int32, output: ref mut ByteBuffer
 ) -> Result<int32, CompressionError> {
+  var block: <uint8>[16384] = <uint8>[16384]{};
+  let buffer = MutableByteView{data: &mut block[0], length: kCompressionBlock as uintptr};
   var offset = start;
   while true {
-    let step = self.Push(input, offset, true);
+    let step = self.PushInto(input, offset, input.Len() - offset, buffer, true);
     if step.IsErr() {
       return step.get_if<CompressionError>() as CompressionError;
     }
 
-    let progress = step.get_if<CompressionProgress>() as CompressionProgress;
+    let progress = step.get_if<CompressionTransfer>() as CompressionTransfer;
     offset += progress.consumed;
-    if output.Write(progress.output.Data(), progress.output.Len() as intptr).IsErr() {
+    if output.Write(&block[0], progress.produced as intptr).IsErr() {
       return CompressionError.ResourceExhausted;
     }
     if progress.complete {
       return offset;
     }
-    if progress.consumed == 0 && progress.output.Len() == 0 {
+    if progress.consumed == 0 && progress.produced == 0 {
       return CompressionError.Corrupt;
     }
   }
@@ -266,20 +268,39 @@ pub method(CompressionStream) Flush() -> Result<CompressionFlush, CompressionErr
 pub method(CompressionStream) PushRange(
   input: ref ByteBuffer, offset: int32, length: int32, end_of_input: bool
 ) -> Result<CompressionProgress, CompressionError> {
+  var block: <uint8>[16384] = <uint8>[16384]{};
+  let buffer = MutableByteView{data: &mut block[0], length: kCompressionBlock as uintptr};
+  let step = self.PushInto(input, offset, length, buffer, end_of_input);
+  if step.IsErr() {
+    return step.get_if<CompressionError>() as CompressionError;
+  }
+
+  let progress = step.get_if<CompressionTransfer>() as CompressionTransfer;
+  var output = ByteBuffer.New();
+  if output.Write(&block[0], progress.produced as intptr).IsErr() {
+    self.Close();
+    return CompressionError.ResourceExhausted;
+  }
+
+  return CompressionProgress{consumed: progress.consumed, output: output, complete: progress.complete};
+}
+
+pub method(CompressionStream) PushInto(
+  input: ref ByteBuffer, offset: int32, length: int32, output: MutableByteView, end_of_input: bool
+) -> Result<CompressionTransfer, CompressionError> {
   if self.raw == nil {
     return CompressionError.Closed;
   }
   if self.flushing || offset < 0 || offset > input.Len() || length < 0 || length > input.Len() - offset ||
-      (self.ending && !end_of_input) {
+      (self.ending && !end_of_input) || output.length == 0 || !output.IsValid() {
     return CompressionError.InvalidArgument;
   }
 
   self.ending = end_of_input;
-  var block: <uint8>[16384] = <uint8>[16384]{};
   var consumed: int32 = 0;
   var produced: int32 = 0;
-  var capacity: int32 = kCompressionBlock;
-  if self.decoding && self.remaining < kCompressionBlock as uint64 {
+  var capacity = output.length < 2147483647up ? output.length as int32 : 2147483647;
+  if self.decoding && self.remaining < (capacity as uint64) {
     // One probe byte distinguishes a trailer at the exact limit from more decoded data.
     capacity = (self.remaining as int32) + 1;
   }
@@ -287,7 +308,7 @@ pub method(CompressionStream) PushRange(
   let address = (input.Data() as intptr) + (offset as intptr);
   let finish: int32 = end_of_input ? 1 : 0;
   let status = nyra_compress_step(
-    self.raw, address as *const uint8, length, &mut block[0], capacity,
+    self.raw, address as *const uint8, length, output.data, capacity,
     finish, &mut consumed, &mut produced
   );
   if status > 1 {
@@ -309,14 +330,9 @@ pub method(CompressionStream) PushRange(
     }
   }
 
-  var output = ByteBuffer.New();
-  if output.Write(&block[0], produced as intptr).IsErr() {
-    self.Close();
-    return CompressionError.ResourceExhausted;
-  }
   if status == 1 {
     self.Close();
   }
 
-  return CompressionProgress{consumed: consumed, output: output, complete: status == 1};
+  return CompressionTransfer{consumed: consumed, produced: produced, complete: status == 1};
 }

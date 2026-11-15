@@ -27,6 +27,13 @@ pub struct CompressionProgress {
   complete: bool;
 }
 
+/** @brief Exact byte counts from a step into caller-owned storage. */
+pub struct CompressionTransfer {
+  consumed: int32;
+  produced: int32;
+  complete: bool;
+}
+
 /** @brief Move-only compression or decompression cursor. */
 pub struct CompressionStream;
 
@@ -113,3 +120,11 @@ pub method(CompressionStream) Push(
 pub method(CompressionStream) PushRange(
   input: ref ByteBuffer, offset: int32, length: int32, end_of_input: bool
 ) -> Result<CompressionProgress, CompressionError>;
+
+/** @brief Process an input range directly into nonempty caller-owned storage.
+ * @note Output storage must be disjoint from the input. Only the produced prefix
+ * is valid on success. On failure, the destination may change. Resubmit unconsumed
+ * input and keep end_of_input set once final draining starts. */
+pub method(CompressionStream) PushInto(
+  input: ref ByteBuffer, offset: int32, length: int32, output: MutableByteView, end_of_input: bool
+) -> Result<CompressionTransfer, CompressionError>;
