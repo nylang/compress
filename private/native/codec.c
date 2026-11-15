@@ -3,13 +3,24 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
 
+#ifdef NYRA_COMPRESSION_EXTENDED
+#include <brotli/decode.h>
+#include <brotli/encode.h>
+#include <lz4frame.h>
+#endif
+
 enum { CONTINUE, COMPLETE, BAD_DATA, RESOURCE, WINDOW_LIMIT };
-enum { GZIP = 1, ZSTANDARD = 2 };
+enum { GZIP = 1, ZSTANDARD = 2, BROTLI = 3, LZ4_FRAME = 4 };
 enum { PUSH, FINISH, FLUSH };
+
+#ifdef NYRA_COMPRESSION_EXTENDED
+#include "extended.h"
+#endif
 
 typedef struct {
     int format;
@@ -18,21 +29,42 @@ typedef struct {
     z_stream gzip;
     ZSTD_CCtx *encoder;
     ZSTD_DCtx *decoder;
+#ifdef NYRA_COMPRESSION_EXTENDED
+    BrotliEncoderState *brotli_encoder;
+    BrotliDecoderState *brotli_decoder;
+    lz4_codec lz4;
+#endif
 } codec;
+
+int nyra_compress_available(int format) {
+#ifdef NYRA_COMPRESSION_EXTENDED
+    if (format == BROTLI || format == LZ4_FRAME) return 1;
+#endif
+    return format == GZIP || format == ZSTANDARD;
+}
 
 void nyra_compress_drop(codec *state) {
     if (!state) return;
     if (state->format == GZIP) {
         if (state->encode) deflateEnd(&state->gzip);
         else inflateEnd(&state->gzip);
-    } else {
+    } else if (state->format == ZSTANDARD) {
         ZSTD_freeCCtx(state->encoder);
         ZSTD_freeDCtx(state->decoder);
     }
+#ifdef NYRA_COMPRESSION_EXTENDED
+    else if (state->format == BROTLI) {
+        BrotliEncoderDestroyInstance(state->brotli_encoder);
+        BrotliDecoderDestroyInstance(state->brotli_decoder);
+    } else if (state->format == LZ4_FRAME) {
+        lz4_drop(&state->lz4);
+    }
+#endif
     free(state);
 }
 
 codec *nyra_compress_open(int format, int encode, int level, int window_log) {
+    if (!nyra_compress_available(format)) return NULL;
     codec *state = calloc(1, sizeof(*state));
     if (!state) return NULL;
     state->format = format;
@@ -58,12 +90,35 @@ codec *nyra_compress_open(int format, int encode, int level, int window_log) {
             }
         }
     }
+#ifdef NYRA_COMPRESSION_EXTENDED
+    else if (format == BROTLI) {
+        if (encode) {
+            state->brotli_encoder = BrotliEncoderCreateInstance(NULL, NULL, NULL);
+            if (state->brotli_encoder &&
+                BrotliEncoderSetParameter(state->brotli_encoder, BROTLI_PARAM_QUALITY, (uint32_t)level)) return state;
+        } else {
+            state->brotli_decoder = BrotliDecoderCreateInstance(NULL, NULL, NULL);
+            if (state->brotli_decoder) return state;
+        }
+    } else if (format == LZ4_FRAME) {
+        if (lz4_open(&state->lz4, encode, level)) return state;
+    }
+#endif
     nyra_compress_drop(state);
     return NULL;
 }
 
 int nyra_compress_step(codec *state, const uint8_t *input, int length, uint8_t *output,
                        int capacity, int action, int *consumed, int *produced) {
+#ifdef NYRA_COMPRESSION_EXTENDED
+    if (state->format == BROTLI) {
+        return brotli_step(state->brotli_encoder, state->brotli_decoder,
+                           input, length, output, capacity, action, consumed, produced);
+    }
+    if (state->format == LZ4_FRAME) {
+        return lz4_step(&state->lz4, input, length, output, capacity, action, consumed, produced);
+    }
+#endif
     if (state->format == GZIP) {
         z_stream *stream = &state->gzip;
         stream->next_in = (Bytef *)input;
@@ -107,6 +162,7 @@ int nyra_compress_step(codec *state, const uint8_t *input, int length, uint8_t *
 }
 
 int nyra_compress_dictionary(codec *state, const uint8_t *bytes, int length) {
+    if (state->format != ZSTANDARD) return BAD_DATA;
     size_t status = state->encode
         ? ZSTD_CCtx_loadDictionary(state->encoder, bytes, (size_t)length)
         : ZSTD_DCtx_loadDictionary(state->decoder, bytes, (size_t)length);

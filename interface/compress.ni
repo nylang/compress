@@ -6,7 +6,9 @@ import "stdlib:stdlib.ny";
 /** @brief Interoperable single-stream codec format. */
 pub enum CompressionFormat {
   Gzip,
-  Zstandard
+  Zstandard,
+  Brotli,
+  Lz4Frame
 }
 
 /** @brief Admission, resource or input-stream failure. */
@@ -18,7 +20,8 @@ pub enum CompressionError {
   LimitExceeded,
   ResourceExhausted,
   TrailingData,
-  Io
+  Io,
+  Unsupported
 }
 
 /** @brief Exact input prefix consumed and one owned output block. */
@@ -38,7 +41,10 @@ pub struct CompressionTransfer {
 /** @brief Move-only compression or decompression cursor. */
 pub struct CompressionStream;
 
-/** @brief Encode a complete buffer as one gzip member or Zstandard frame. */
+/** @brief Report whether the linked native bridge supports this format. */
+pub static method(CompressionStream) IsAvailable(format: CompressionFormat) -> bool;
+
+/** @brief Encode a complete buffer as one member, frame or Brotli stream. */
 pub static method(CompressionStream) Compress(
   format: CompressionFormat, input: ref ByteBuffer
 ) -> Result<ByteBuffer, CompressionError>;
@@ -59,7 +65,10 @@ pub static method(CompressionStream) DecompressAll(
 /** @brief Start a default-level encoder. */
 pub static method(CompressionStream) Encode(format: CompressionFormat) -> Result<CompressionStream, CompressionError>;
 
-/** @brief Start an encoder at an explicit level. Gzip accepts 0..9 and Zstandard accepts 1..22. */
+/**
+ * @brief Start an encoder at an explicit level.
+ * Gzip accepts 0..9, Zstandard 1..22, Brotli 0..11 and LZ4 Frame 0..12.
+ */
 pub static method(CompressionStream) EncodeLevel(
   format: CompressionFormat, level: int32
 ) -> Result<CompressionStream, CompressionError>;

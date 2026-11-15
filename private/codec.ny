@@ -7,6 +7,7 @@ import "stdlib:stdlib.ny";
 import "interface/compress.ni";
 
 @extern("C") func nyra_compress_open(format: int32, encode: int32, level: int32, window_log: int32) -> *mut int8;
+@extern("C") func nyra_compress_available(format: int32) -> int32;
 @extern("C") func nyra_compress_drop(state: *mut int8) -> void;
 @extern("C") func nyra_compress_dictionary(state: *mut int8, data: *const uint8, size: int32) -> int32;
 @extern("C") func nyra_compress_step(
@@ -29,7 +30,11 @@ pub struct CompressionStream {
 static method(CompressionStream) Open(
   format: CompressionFormat, decoding: bool, budget: uint64, level: int32, window_log: int32
 ) -> Result<CompressionStream, CompressionError> {
-  let kind: int32 = format == CompressionFormat.Gzip ? 1 : 2;
+  let kind = CompressionStream.NativeFormat(format);
+  if nyra_compress_available(kind) == 0 {
+    return CompressionError.Unsupported;
+  }
+
   let encode: int32 = decoding ? 0 : 1;
   let raw = nyra_compress_open(kind, encode, level, window_log);
   if raw == nil {
@@ -39,14 +44,51 @@ static method(CompressionStream) Open(
   return CompressionStream{raw: raw, decoding: decoding, remaining: budget};
 }
 
+static method(CompressionStream) NativeFormat(format: CompressionFormat) -> int32 {
+  if format == CompressionFormat.Gzip {
+    return 1;
+  }
+  if format == CompressionFormat.Zstandard {
+    return 2;
+  }
+  if format == CompressionFormat.Brotli {
+    return 3;
+  }
+  if format == CompressionFormat.Lz4Frame {
+    return 4;
+  }
+
+  return 0;
+}
+
+pub static method(CompressionStream) IsAvailable(format: CompressionFormat) -> bool {
+  return nyra_compress_available(CompressionStream.NativeFormat(format)) != 0;
+}
+
 pub static method(CompressionStream) Encode(format: CompressionFormat) -> Result<CompressionStream, CompressionError> {
-  return CompressionStream.Open(format, false, 0u64, format == CompressionFormat.Gzip ? -1 : 0, 0);
+  var level: int32 = 0;
+  if format == CompressionFormat.Gzip {
+    level = -1;
+  } else if format == CompressionFormat.Brotli {
+    level = 5;
+  }
+
+  return CompressionStream.Open(format, false, 0u64, level, 0);
 }
 
 pub static method(CompressionStream) EncodeLevel(
   format: CompressionFormat, level: int32
 ) -> Result<CompressionStream, CompressionError> {
-  let valid = format == CompressionFormat.Gzip ? level >= 0 && level <= 9 : level >= 1 && level <= 22;
+  var valid: bool = false;
+  if format == CompressionFormat.Gzip {
+    valid = level >= 0 && level <= 9;
+  } else if format == CompressionFormat.Zstandard {
+    valid = level >= 1 && level <= 22;
+  } else if format == CompressionFormat.Brotli {
+    valid = level >= 0 && level <= 11;
+  } else if format == CompressionFormat.Lz4Frame {
+    valid = level >= 0 && level <= 12;
+  }
   if !valid {
     return CompressionError.InvalidArgument;
   }

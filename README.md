@@ -4,6 +4,12 @@ The hosted `compress` package encodes and decodes gzip and Zstandard
 streams. Compile `private/native/codec.c` with zlib and Zstandard headers
 and link the object with both libraries.
 
+To also enable Brotli and LZ4 Frame, compile the same bridge with
+`-DNYRA_COMPRESSION_EXTENDED`, add the Brotli and LZ4 include directories
+and link `brotlienc`, `brotlidec`, `brotlicommon` and `lz4`. In the base
+build, opening either format returns `Unsupported`. Query availability
+with `CompressionStream.IsAvailable(format)`.
+
 Create a `CompressionStream` with `Encode` or `Decode`. The decoder
 requires an explicit total decoded byte limit. Call `Push` with the
 current input block and its consumed offset, collect the owned output
@@ -13,8 +19,8 @@ subrange of a reused buffer. Invalid ranges leave the cursor usable.
 Use `PushInto` with a nonempty `MutableByteView` to write directly into
 a reusable output buffer. Advance by the returned consumed count and use
 only the produced prefix. The input and output ranges must be disjoint.
-A completed decoder stops at one
-gzip member or Zstandard frame. Use the consumed count to hand trailing
+A completed decoder stops at one member, frame or Brotli stream.
+Use the consumed count to hand trailing
 bytes to another cursor if your format permits multiple members. A
 truncated input or exhausted decoded-byte budget retires the cursor.
 
@@ -32,7 +38,9 @@ sequence, including when the final member ends exactly at an input boundary.
 connect a source and destination implementing `Stream` with fixed scratch
 buffers and leave both open.
 
-`EncodeLevel` selects gzip levels 0 through 9 or Zstandard levels 1 through 22.
+`EncodeLevel` selects gzip levels 0 through 9, Zstandard levels 1 through 22,
+Brotli levels 0 through 11 or LZ4 Frame levels 0 through 12. The default
+Brotli level is 5. LZ4 encoding uses 64 KiB blocks and a content checksum.
 After the encoder has consumed the supplied input, call `Flush` until it
 reports `drained`. Append every returned output block to the same stream.
 Flushing makes the accepted data available to a decoder while leaving the

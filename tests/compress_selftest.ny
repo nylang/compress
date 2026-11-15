@@ -50,7 +50,7 @@ func check_codec(format: CompressionFormat) -> void {
     return;
   }
   let first = prefix.get_if<CompressionProgress>() as CompressionProgress;
-  AssertEqI32(first.consumed, 3);
+  AssertTrue(first.consumed <= 3 && (first.consumed > 0 || first.output.Len() > 0));
   let encoded = run_codec(encoder, bytes, first.consumed);
   if AssertTrue(encoded.IsOk()) != 0 {
     return;
@@ -138,6 +138,66 @@ func test_gzip_and_zstd_push_into_caller_buffer() {
 }
 
 @test
+func test_extended_formats_and_base_provider_admission() {
+  check_extended_codec(CompressionFormat.Brotli);
+  check_extended_codec(CompressionFormat.Lz4Frame);
+}
+
+func check_extended_codec(format: CompressionFormat) -> void {
+  if !CompressionStream.IsAvailable(format) {
+    let unavailable = CompressionStream.Encode(format);
+    AssertTrue(unavailable.IsErr() &&
+      (unavailable.get_if<CompressionError>() as CompressionError) == CompressionError.Unsupported);
+    return;
+  }
+
+  check_codec(format);
+  check_whole_buffer(format);
+  check_push_into(format);
+  check_flush(format, 1);
+  check_concatenated(format);
+
+  // Split the encoded header and trailer across one-byte output buffers.
+  var opened = CompressionStream.Encode(format);
+  if AssertTrue(opened.IsOk()) != 0 {
+    return;
+  }
+
+  var encoder = move(opened.get_if<CompressionStream>() as CompressionStream);
+  var plain = ByteBuffer.New();
+  var wire = ByteBuffer.New();
+  plain.WriteString("tiny encoder output");
+  var byte: uint8 = 0;
+  let output = MutableByteView{data: &mut byte, length: 1up};
+  var offset: int32 = 0;
+  var complete: bool = false;
+  while !complete {
+    let pushed = encoder.PushInto(plain, offset, plain.Len() - offset, output, true);
+    if AssertTrue(pushed.IsOk()) != 0 {
+      return;
+    }
+
+    let progress = pushed.get_if<CompressionTransfer>() as CompressionTransfer;
+    if AssertTrue(progress.produced <= 1 && (progress.complete || progress.consumed > 0 || progress.produced > 0)) != 0 {
+      return;
+    }
+
+    wire.Write(output.data, progress.produced as intptr);
+    offset += progress.consumed;
+    complete = progress.complete;
+  }
+
+  AssertEqI32(offset, plain.Len());
+  let decoded = CompressionStream.Decompress(format, wire, plain.Len() as uint64);
+  if AssertTrue(decoded.IsOk()) != 0 {
+    return;
+  }
+
+  let data = decoded.get_if<ByteBuffer>() as ByteBuffer;
+  AssertEqString(string.ViewFrom(data.Data() as *const int8, data.Len()), "tiny encoder output");
+}
+
+@test
 func test_streaming_concatenated_members_into_file() {
   let created = Directory.SystemTemp().CreateTemp("nyra-codec-sequence-");
   if AssertTrue(created.IsOk()) != 0 {
@@ -147,6 +207,12 @@ func test_streaming_concatenated_members_into_file() {
   let directory = created.get_if<Directory>() as Directory;
   check_sequence_file(CompressionFormat.Gzip, directory, "gzip");
   check_sequence_file(CompressionFormat.Zstandard, directory, "zstd");
+  if CompressionStream.IsAvailable(CompressionFormat.Brotli) {
+    check_sequence_file(CompressionFormat.Brotli, directory, "brotli");
+  }
+  if CompressionStream.IsAvailable(CompressionFormat.Lz4Frame) {
+    check_sequence_file(CompressionFormat.Lz4Frame, directory, "lz4");
+  }
   AssertTrue(directory.DeleteRecursive().IsOk());
 }
 
@@ -277,14 +343,23 @@ func check_flush(format: CompressionFormat, level: int32) -> void {
   var encoder = move(opened.get_if<CompressionStream>() as CompressionStream);
   var input = ByteBuffer.New();
   input.WriteString("first");
-  let pushed = encoder.Push(input, 0, false);
-  if AssertTrue(pushed.IsOk()) != 0 {
-    return;
-  }
-  let progress = pushed.get_if<CompressionProgress>() as CompressionProgress;
-  AssertEqI32(progress.consumed, 5);
   var wire = ByteBuffer.New();
-  wire.Write(progress.output.Data(), progress.output.Len() as intptr);
+  var offset: int32 = 0;
+  while offset < input.Len() {
+    let pushed = encoder.Push(input, offset, false);
+    if AssertTrue(pushed.IsOk()) != 0 {
+      return;
+    }
+
+    let progress = pushed.get_if<CompressionProgress>() as CompressionProgress;
+    if AssertTrue(progress.consumed > 0 || progress.output.Len() > 0) != 0 {
+      return;
+    }
+
+    offset += progress.consumed;
+    wire.Write(progress.output.Data(), progress.output.Len() as intptr);
+  }
+
   let flushed = encoder.Flush();
   if AssertTrue(flushed.IsOk()) != 0 {
     return;
@@ -415,7 +490,8 @@ func check_concatenated(format: CompressionFormat) -> void {
   AssertTrue(CompressionStream.Decompress(format, wire, 4u64).IsErr());
 
   var short = ByteBuffer.New();
-  short.Write(wire.Data(), (wire.Len() - 1) as intptr);
+  // Truncate the nonempty member; an empty Brotli member can occupy one byte.
+  short.Write(wire.Data(), (a.Len() + b.Len() - 1) as intptr);
   let truncated = CompressionStream.DecompressAll(format, short, 4u64, 3);
   AssertTrue(truncated.IsErr() && (truncated.get_if<CompressionError>() as CompressionError) == CompressionError.Truncated);
 }
