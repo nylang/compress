@@ -4,3 +4,4 @@
 /** @brief Streaming gzip and Zstandard codecs for hosted applications. */
 export "interface/compress.ni";
 import "private/codec.ny";
+import "private/sequence.ny";

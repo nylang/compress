@@ -17,7 +17,8 @@ pub enum CompressionError {
   Truncated,
   LimitExceeded,
   ResourceExhausted,
-  TrailingData
+  TrailingData,
+  Io
 }
 
 /** @brief Exact input prefix consumed and one owned output block. */
@@ -128,3 +129,35 @@ pub method(CompressionStream) PushRange(
 pub method(CompressionStream) PushInto(
   input: ref ByteBuffer, offset: int32, length: int32, output: MutableByteView, end_of_input: bool
 ) -> Result<CompressionTransfer, CompressionError>;
+
+/** @brief Advance directly between disjoint borrowed buffers.
+ * @note Input size must fit int32. Reoffer bytes that were not consumed. */
+pub method(CompressionStream) PushBytes(
+  input: ByteView, output: MutableByteView, end_of_input: bool
+) -> Result<CompressionTransfer, CompressionError>;
+
+/** @brief Owns incremental decoding of concatenated gzip members or Zstandard frames. */
+pub struct CompressionSequence;
+pub method(CompressionSequence) operator copy() -> CompressionSequence = delete;
+pub method(CompressionSequence) operator move() -> CompressionSequence;
+
+/** @brief Create a sequence decoder with total output and member limits. */
+pub static method(CompressionSequence) New(
+  format: CompressionFormat, max_output: uint64, max_members: int32
+) -> Result<CompressionSequence, CompressionError>;
+
+/** @brief Advance decoding into a caller buffer, retaining at most one active codec.
+ * @note complete denotes the end of the whole sequence and requires end_of_input.
+ * An exact member boundary before then is a valid pause. Resubmit the input suffix
+ * after each step. Zero bytes for the whole input are Truncated. */
+pub method(CompressionSequence) PushBytes(
+  input: ByteView, output: MutableByteView, end_of_input: bool
+) -> Result<CompressionTransfer, CompressionError>;
+
+/** @brief Decode from one blocking Stream into another using bounded scratch.
+ * @note Streams stay open. A read or write failure returns Io and may leave
+ * partial output. Flush the destination when required by its contract. */
+pub static method(CompressionSequence) DecodeStream(
+  format: CompressionFormat, source: ref mut Stream, destination: ref mut Stream,
+  max_output: uint64, max_members: int32
+) -> Result<Unit, CompressionError>;

@@ -25,6 +25,11 @@ if anything follows the first member or frame.
 Use `DecompressAll` for concatenated members or frames of one format.
 The output limit applies across the whole input, and the member limit
 includes empty members.
+`CompressionSequence.PushBytes` handles the same format and aggregate
+limits across input chunks. It reports completion at the end of the
+sequence, including when the final member ends exactly at an input boundary.
+`CompressionSequence.DecodeStream` connects a source and destination
+implementing `Stream` with fixed scratch buffers and leaves both open.
 
 `EncodeLevel` selects gzip levels 0 through 9 or Zstandard levels 1 through 22.
 After the encoder has consumed the supplied input, call `Flush` until it

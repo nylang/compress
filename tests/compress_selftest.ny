@@ -137,6 +137,64 @@ func test_gzip_and_zstd_push_into_caller_buffer() {
   check_push_into(CompressionFormat.Zstandard);
 }
 
+@test
+func test_streaming_concatenated_members_into_file() {
+  let created = Directory.SystemTemp().CreateTemp("nyra-codec-sequence-");
+  if AssertTrue(created.IsOk()) != 0 {
+    return;
+  }
+
+  let directory = created.get_if<Directory>() as Directory;
+  check_sequence_file(CompressionFormat.Gzip, directory, "gzip");
+  check_sequence_file(CompressionFormat.Zstandard, directory, "zstd");
+  AssertTrue(directory.DeleteRecursive().IsOk());
+}
+
+func check_sequence_file(format: CompressionFormat, directory: ref Directory, suffix: ref string) -> void {
+  let input_file = File.New(Path.Join(directory.Path(), suffix.Concat(".input")));
+  let output_file = File.New(Path.Join(directory.Path(), suffix.Concat(".output")));
+  var first = ByteBuffer.New();
+  var second = ByteBuffer.New();
+  first.WriteString("first ");
+  second.WriteString("second");
+  let one = CompressionStream.Compress(format, first);
+  let two = CompressionStream.Compress(format, second);
+  if AssertTrue(one.IsOk() && two.IsOk()) != 0 {
+    return;
+  }
+
+  let left = one.get_if<ByteBuffer>() as ByteBuffer;
+  let right = two.get_if<ByteBuffer>() as ByteBuffer;
+  var wire = ByteBuffer.New();
+  wire.Write(left.Data(), left.Len() as intptr);
+  wire.Write(right.Data(), right.Len() as intptr);
+  AssertTrue(input_file.WriteBuffer(wire).IsOk());
+  var input = input_file.Open(FileMode.Read);
+  var output = output_file.Open(FileMode.Write);
+  if AssertTrue(input.IsOk() && output.IsOk()) != 0 {
+    return;
+  }
+
+  var reader = move(input.get_if<FileStream>() as FileStream);
+  var writer = move(output.get_if<FileStream>() as FileStream);
+  AssertTrue(CompressionSequence.DecodeStream(format, reader, writer, 12u64, 2).IsOk());
+  AssertTrue(reader.Close().IsOk() && writer.Close().IsOk());
+  let recovered = output_file.ReadAsString();
+  AssertTrue(recovered.IsOk() && (recovered.get_if<string>() as string) == "first second");
+
+  var opened = CompressionSequence.New(format, 12u64, 1);
+  if AssertTrue(opened.IsOk()) != 0 {
+    return;
+  }
+  var decoder = move(opened.get_if<CompressionSequence>() as CompressionSequence);
+  var scratch: <uint8>[64] = <uint8>[64]{};
+  let output_view = MutableByteView{data: &mut scratch[0], length: 64up};
+  let boundary = decoder.PushBytes(ByteView{data: left.Data(), length: left.Len() as uintptr}, output_view, false);
+  AssertTrue(boundary.IsOk() && !(boundary.get_if<CompressionTransfer>() as CompressionTransfer).complete);
+  let rejected = decoder.PushBytes(ByteView{data: right.Data(), length: right.Len() as uintptr}, output_view, true);
+  AssertTrue(rejected.IsErr() && (rejected.get_if<CompressionError>() as CompressionError) == CompressionError.LimitExceeded);
+}
+
 func check_push_into(format: CompressionFormat) -> void {
   var input = ByteBuffer.New();
   input.WriteString("a small buffer exercises repeated draining");

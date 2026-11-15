@@ -291,8 +291,22 @@ pub method(CompressionStream) PushInto(
   if self.raw == nil {
     return CompressionError.Closed;
   }
-  if self.flushing || offset < 0 || offset > input.Len() || length < 0 || length > input.Len() - offset ||
-      (self.ending && !end_of_input) || output.length == 0 || !output.IsValid() {
+  if offset < 0 || offset > input.Len() || length < 0 || length > input.Len() - offset {
+    return CompressionError.InvalidArgument;
+  }
+
+  let address = (input.Data() as intptr) + (offset as intptr);
+  return self.PushBytes(ByteView{data: address as *const uint8, length: length as uintptr}, output, end_of_input);
+}
+
+pub method(CompressionStream) PushBytes(
+  input: ByteView, output: MutableByteView, end_of_input: bool
+) -> Result<CompressionTransfer, CompressionError> {
+  if self.raw == nil {
+    return CompressionError.Closed;
+  }
+  if self.flushing || (self.ending && !end_of_input) || input.length > 2147483647up ||
+      !input.IsValid() || output.length == 0 || !output.IsValid() {
     return CompressionError.InvalidArgument;
   }
 
@@ -305,10 +319,9 @@ pub method(CompressionStream) PushInto(
     capacity = (self.remaining as int32) + 1;
   }
 
-  let address = (input.Data() as intptr) + (offset as intptr);
   let finish: int32 = end_of_input ? 1 : 0;
   let status = nyra_compress_step(
-    self.raw, address as *const uint8, length, output.data, capacity,
+    self.raw, input.data, input.length as int32, output.data, capacity,
     finish, &mut consumed, &mut produced
   );
   if status > 1 {
