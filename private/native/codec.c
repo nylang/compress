@@ -105,3 +105,14 @@ int nyra_compress_step(codec *state, const uint8_t *input, int length, uint8_t *
     *produced = (int)dest.pos;
     return status == 0 && (!state->encode || action != PUSH) ? COMPLETE : CONTINUE;
 }
+
+int nyra_compress_dictionary(codec *state, const uint8_t *bytes, int length) {
+    size_t status = state->encode
+        ? ZSTD_CCtx_loadDictionary(state->encoder, bytes, (size_t)length)
+        : ZSTD_DCtx_loadDictionary(state->decoder, bytes, (size_t)length);
+    // Raw dictionaries have no ID in the frame; check the decoded bytes as well.
+    if (!ZSTD_isError(status) && state->encode)
+        status = ZSTD_CCtx_setParameter(state->encoder, ZSTD_c_checksumFlag, 1);
+    if (!ZSTD_isError(status)) return CONTINUE;
+    return ZSTD_getErrorCode(status) == ZSTD_error_memory_allocation ? RESOURCE : BAD_DATA;
+}

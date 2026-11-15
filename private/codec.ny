@@ -8,6 +8,7 @@ import "interface/compress.ni";
 
 @extern("C") func nyra_compress_open(format: int32, encode: int32, level: int32, window_log: int32) -> *mut int8;
 @extern("C") func nyra_compress_drop(state: *mut int8) -> void;
+@extern("C") func nyra_compress_dictionary(state: *mut int8, data: *const uint8, size: int32) -> int32;
 @extern("C") func nyra_compress_step(
   state: *mut int8, input: *const uint8, length: int32, output: *mut uint8, capacity: int32,
   finish: int32, consumed: *mut int32, produced: *mut int32
@@ -67,6 +68,42 @@ pub static method(CompressionStream) DecodeZstandard(
   }
 
   return CompressionStream.Open(CompressionFormat.Zstandard, true, max_output, 0, window_log);
+}
+
+pub static method(CompressionStream) EncodeZstandardDictionary(
+  dictionary: ref ByteBuffer, level: int32
+) -> Result<CompressionStream, CompressionError> {
+  return CompressionStream.OpenDictionary(dictionary, level, false, 0u64, 0);
+}
+
+pub static method(CompressionStream) DecodeZstandardDictionary(
+  dictionary: ref ByteBuffer, max_output: uint64, window_log: int32
+) -> Result<CompressionStream, CompressionError> {
+  if window_log < 10 || window_log > 27 {
+    return CompressionError.InvalidArgument;
+  }
+
+  return CompressionStream.OpenDictionary(dictionary, 0, true, max_output, window_log);
+}
+
+static method(CompressionStream) OpenDictionary(
+  dictionary: ref ByteBuffer, level: int32, decoding: bool, max_output: uint64, window_log: int32
+) -> Result<CompressionStream, CompressionError> {
+  if dictionary.Len() < 8 || dictionary.Len() > 1048576 || (!decoding && (level < 1 || level > 22)) {
+    return CompressionError.InvalidArgument;
+  }
+
+  var opened = CompressionStream.Open(CompressionFormat.Zstandard, decoding, max_output, level, window_log);
+  if opened.IsErr() {
+    return opened.get_if<CompressionError>() as CompressionError;
+  }
+  var stream = move(opened.get_if<CompressionStream>() as CompressionStream);
+  let status = nyra_compress_dictionary(stream.raw, dictionary.Data(), dictionary.Len());
+  if status != 0 {
+    return status == 3 ? CompressionError.ResourceExhausted : CompressionError.Corrupt;
+  }
+
+  return move(stream);
 }
 
 pub static method(CompressionStream) Compress(

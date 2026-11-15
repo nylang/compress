@@ -80,6 +80,17 @@ pub static method(CompressionStream) DecodeZstandard(
   max_output: uint64, window_log: int32
 ) -> Result<CompressionStream, CompressionError>;
 
+/** @brief Start a Zstandard encoder with a copied dictionary, 8 bytes to 1 MiB. */
+pub static method(CompressionStream) EncodeZstandardDictionary(
+  dictionary: ref ByteBuffer, level: int32
+) -> Result<CompressionStream, CompressionError>;
+
+/** @brief Start a bounded Zstandard decoder with the same dictionary used for encoding.
+ * @note The provider copies the dictionary. Its storage is additional to the window limit. */
+pub static method(CompressionStream) DecodeZstandardDictionary(
+  dictionary: ref ByteBuffer, max_output: uint64, window_log: int32
+) -> Result<CompressionStream, CompressionError>;
+
 /** @brief Active codec state has one owner. */
 pub method(CompressionStream) operator copy() -> CompressionStream = delete;
 

@@ -218,6 +218,46 @@ func test_zstd_explicit_window_budget() {
   AssertTrue(run_codec(accepted, wire, 0).IsOk());
 }
 
+@test
+func test_zstd_dictionary_roundtrip_with_copied_dictionary() {
+  AssertTrue(CompressionStream.EncodeZstandardDictionary(ByteBuffer.New(), 4).IsErr());
+  var dictionary = ByteBuffer.New();
+  dictionary.WriteString("Ecosystem event type country city topic severity timestamp attributes");
+  var payload = ByteBuffer.New();
+  payload.WriteString("Ecosystem event type country city topic severity timestamp attributes");
+  var encoded = CompressionStream.EncodeZstandardDictionary(dictionary, 8);
+  var decoded = CompressionStream.DecodeZstandardDictionary(dictionary, 1024u64, 20);
+  if AssertTrue(encoded.IsOk() && decoded.IsOk()) != 0 {
+    return;
+  }
+
+  dictionary = ByteBuffer.New();
+  var encoder = move(encoded.get_if<CompressionStream>() as CompressionStream);
+  var decoder = move(decoded.get_if<CompressionStream>() as CompressionStream);
+  let wire = run_codec(encoder, payload, 0);
+  if AssertTrue(wire.IsOk()) != 0 {
+    return;
+  }
+  let output = run_codec(decoder, wire.get_if<ByteBuffer>() as ByteBuffer, 0);
+  if AssertTrue(output.IsOk()) != 0 {
+    return;
+  }
+  let bytes = output.get_if<ByteBuffer>() as ByteBuffer;
+  AssertEqString(
+    string.ViewFrom(bytes.Data() as *const int8, bytes.Len()),
+    string.ViewFrom(payload.Data() as *const int8, payload.Len())
+  );
+  var wrong = ByteBuffer.New();
+  wrong.WriteString("Ecosystem event type country city topic severity TIMESTAMP attributes");
+  var opened_wrong = CompressionStream.DecodeZstandardDictionary(wrong, 1024u64, 20);
+  if AssertTrue(opened_wrong.IsOk()) != 0 {
+    return;
+  }
+  var incorrect = move(opened_wrong.get_if<CompressionStream>() as CompressionStream);
+  let rejected = run_codec(incorrect, wire.get_if<ByteBuffer>() as ByteBuffer, 0);
+  AssertTrue(rejected.IsErr() && (rejected.get_if<CompressionError>() as CompressionError) == CompressionError.Corrupt);
+}
+
 func check_concatenated(format: CompressionFormat) -> void {
   var input = ByteBuffer.New();
   let empty = CompressionStream.Compress(format, input);
